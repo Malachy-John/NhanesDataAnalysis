@@ -1,0 +1,704 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#heart & oral health
+
+
+```{r - Installations}
+
+#install.packages("tidyverse")
+#install.packages("gridExtra") #this package helps to organize figure output from ggplot
+#install.packages("nhanesA") #this package enables data files to be directly retreived & imported from the NHANES website and converted into R data tables.
+#daag = k fold
+#install.packages("DAAG")
+#install.packages("reshape2") 
+#install.packages("psych")
+#install.packages("ggpubr")
+#install.packages("rstatix")
+library(nhanesA)
+library(tidyverse)
+library(gridExtra)
+library(car) 
+library(DAAG)
+library(psych)
+library(reshape2) 
+library(ggpubr)
+library(rstatix)
+
+
+```
+
+
+
+
+
+#correlation, then multiple regression & then kfold, residual error.
+
+```{r - Importing data for part 1}
+
+
+#health markers
+
+#BMI data
+BMX_I <- nhanes('BMX_I')
+#Cholesterol Data
+TCHOL_I <- nhanes('TCHOL_I')
+#Insulin Data
+INS_I <- nhanes('INS_I')
+#Demographic Data
+DEMO_I <- nhanes('DEMO_I')
+#Dexa scan Data
+DXX_I <- nhanes('DXX_I')
+#Triglycerides data
+TRIGLY_I <- nhanes('TRIGLY_I')
+#Glucose Levels
+GLU_I <- nhanes('GLU_I')
+#Dietary Interview
+DR1TOT_I <- nhanes('DR1TOT_I')
+#Diabetes
+DIQ_I <- nhanes('DIQ_I')
+#Blood pressure
+BPX_I <- nhanes('BPX_I')
+
+
+
+```
+
+```{r}
+#TBH I MIGHT JUST USE CALORIES ALONE. MIGHT BE MORE FUN
+
+#DR1TOT_I$DR1TKCAL 
+
+
+#MergedData2016 <- merge(DR1TOT_I, TCHOL_I, all=TRUE)
+MergedData2016 <- DR1TOT_I
+MergedData2016 <- merge(MergedData2016, BMX_I, all=TRUE)
+MergedData2016 <- merge(MergedData2016, INS_I, all=TRUE)
+MergedData2016 <- merge(MergedData2016, DEMO_I, all=TRUE)
+MergedData2016 <- merge(MergedData2016, DXX_I, all=TRUE)
+#MergedData2016 <- merge(MergedData2016, TRIGLY_I, all=TRUE)
+MergedData2016 <- merge(MergedData2016, GLU_I, all=TRUE)
+MergedData2016 <- merge(MergedData2016, DIQ_I, all=TRUE)
+
+
+MergedData2016 <- subset(MergedData2016, RIDAGEYR >= 19)
+MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$DR1TKCAL)))
+MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$LBDINSI)))
+#MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$LBDTCSI)))
+MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$BMXBMI)))
+MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$DXDTOPF)))
+#MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$LBDTRSI)))
+MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$LBDGLUSI)))
+MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$BMXWT)))
+
+
+#problem! How do we cut out the true outliers?
+#Someone with a High BMI may be eating a relatively normal amount of calories for their weight.
+#We want to capture if someone is eating a amount of calories that goes against what their BMI would suggest
+
+plot(MergedData2016$DR1TKCAL, MergedData2016$BMXBMI, main="Scatterplot Example",
+   xlab="Calories Reported", ylab="BMI ",pch=19)
+
+
+
+#Do some cleaning up on the Insulin values
+MergedData2016["DIQ010"][MergedData2016["DIQ010"] == 3] <- NA
+MergedData2016["DIQ010"][MergedData2016["DIQ010"] == 2] <- 0
+#MergedData2016["DIQ010"][MergedData2016["DIQ010"] == 1] <- NA
+MergedData2016["DIQ010"][MergedData2016["DIQ010"] == 7] <- NA
+MergedData2016["DIQ010"][MergedData2016["DIQ010"] == 9] <- NA
+
+MergedData2016 <- subset(MergedData2016, (!is.na(MergedData2016$DIQ010)))
+
+
+
+
+
+
+
+```
+
+
+
+
+#OK READ THIS: WE WANT TO REMOVE OUTLIERS TO SEE IF WE CAN GET AN EVEN STRONGER NEGATIVE ASSOCIATION
+
+
+
+```{r - Part 1: Discovery}
+
+#creating a new variable
+MergedData2016$Cals_per_kg <- MergedData2016$DR1TKCAL/MergedData2016$BMXWT
+MergedData2016$logDR1TKCAL = log(MergedData2016$DR1TKCAL)
+MergedData2016$logLBDINSI = log(MergedData2016$LBDINSI)
+MergedData2016$logBMXBMI = log(MergedData2016$BMXBMI)
+MergedData2016$logDXDTOPF = log(MergedData2016$DXDTOPF)
+MergedData2016$logLBDGLUSI = log(MergedData2016$LBDGLUSI)
+MergedData2016$logCals_per_kg = log(MergedData2016$Cals_per_kg)
+
+
+#This doesn't make sense, why does BMI not correlate with calories consumed?
+Calorie_BMI_model <- ggplot(MergedData2016, aes(x = DR1TKCAL, y = BMXBMI)) +
+    geom_point() +
+   geom_smooth(method = "lm", se = FALSE) +  #adds ls regression line
+    xlab("Calorie Count") +
+  ylab("BMI")
+Calorie_BMI_model
+
+#Little correlation here too.
+Calorie_Weight_model <- ggplot(MergedData2016, aes(x = DR1TKCAL, y = BMXWT)) +
+    geom_point() +
+   geom_smooth(method = "lm", se = FALSE) +  #adds ls regression line
+    xlab("Calorie Count") +
+  ylab("Weight")
+Calorie_Weight_model
+
+
+#Lets make a scatter plot of the calories consumed per kg of bodyweight to their BMI
+Calorie_Weight_model <- ggplot(MergedData2016, aes(x = Cals_per_kg, y = BMXBMI)) +
+    geom_point() +
+   geom_smooth(method = "lm", se = FALSE) +  #adds ls regression line
+    xlab("Calories per KG of bodyweight") +
+  ylab("BMI")
+Calorie_Weight_model
+
+#Result! We can see a negative correlation to the calories consumed per kg relative to their BMI, this suggests that people who are heavier eat less per kg and people who are underweight eat more per kg. 
+
+hist(MergedData2016$Cals_per_kg)
+
+```
+
+
+```{r - Part 1: Further Discovery}
+#We can see the suggestion that there is a difference in BMI levels between those who have and don't have diabetes.
+BMI_Diabetes_Box <- boxplot(MergedData2016$BMXBMI~MergedData2016$DIQ010, outline=FALSE, ylab="BMI", xlab="Diabetic (N/Y)") + 
+  scale_y_continuous(limits = quantile(MergedData2016$DIQ010, c(0.1, 0.9)))
+
+#And yet the amount of calories eaten between diabetic and non-diabetic people seems very similar.
+Calorie_Diabetes_Box <- boxplot(MergedData2016$DR1TKCAL~MergedData2016$DIQ010, outline=FALSE,  ylab="Calorie Intake", xlab="Diabetic (N/Y)") + 
+  scale_y_continuous(limits = quantile(MergedData2016$DIQ010, c(0.1, 0.9)))
+
+#And yet the amount of calories eaten between diabetic and non-diabetic people seems very similar.
+Calorie_Diabetes_Box <- boxplot(MergedData2016$Cals_per_kg~MergedData2016$DIQ010, outline=FALSE,  ylab="Calorie Intake", xlab="Diabetic (N/Y)") + 
+  scale_y_continuous(limits = quantile(MergedData2016$DIQ010, c(0.1, 0.9)))
+
+
+#hist(MergedData2016$DR1TKCAL)
+
+#MergedData2016$logCalories =log(MergedData2016$DR1TKCA)
+
+#hist(MergedData2016$logCalories)
+
+res.ftest <- var.test(logCalories ~ DIQ010, data = MergedData2016)
+res.ftest
+
+res.ftest <- var.test(logBMXBMI ~ DIQ010, data = MergedData2016)
+res.ftest
+
+res.ftest <- var.test(Cals_per_kg ~ DIQ010, data = MergedData2016)
+res.ftest
+
+qqnorm(MergedData2016$logCalories)
+
+qqnorm(MergedData2016$logBMXBMI)
+
+qqnorm(MergedData2016$Cals_per_kg)
+
+
+wilcox.test(MergedData2016$logCalories~MergedData2016$DIQ010)
+
+wilcox.test(MergedData2016$logBMXBMI~MergedData2016$DIQ010)
+
+wilcox.test(MergedData2016$Cals_per_kg~MergedData2016$DIQ010)
+
+```
+
+
+
+
+```{r - Part 2: Categorizing weight groups}
+
+
+MergedData2016$bmi_group <- as.factor(ifelse(MergedData2016$BMXBMI<18.5, 'underweight',
+                     ifelse(MergedData2016$BMXBMI<25, 'Normal weight',
+                     ifelse(MergedData2016$BMXBMI<30, 'Overweight',
+                     ifelse(MergedData2016$BMXBMI<40, 'Obesity', 'Sev Obese')))))
+
+MergedData2016$dia_bmi_group <- as.factor(ifelse(MergedData2016$BMXBMI<18.5 & MergedData2016$DIQ010 == 1 , 'Under D',
+                                                 ifelse(MergedData2016$BMXBMI<18.5 & MergedData2016$DIQ010 == 0 , 'Under ND',
+                     ifelse(MergedData2016$BMXBMI<25 & MergedData2016$DIQ010 == 1 , 'Normal D',
+                     ifelse(MergedData2016$BMXBMI<25 & MergedData2016$DIQ010 == 0 , 'Normal ND',
+                     ifelse(MergedData2016$BMXBMI<30 & MergedData2016$DIQ010 == 1, 'Over D',
+                     ifelse(MergedData2016$BMXBMI<30 & MergedData2016$DIQ010 == 0, 'Over ND',
+                     ifelse(MergedData2016$BMXBMI<40 & MergedData2016$DIQ010 == 1, 'Obese D',
+                     ifelse(MergedData2016$BMXBMI<40 & MergedData2016$DIQ010 == 0, 'Obese ND',
+                     ifelse(MergedData2016$BMXBMI>=40 & MergedData2016$DIQ010 == 1, 'SevOb D',
+                     ifelse(MergedData2016$BMXBMI>=40 & MergedData2016$DIQ010 == 0, 'SevOb ND',
+                      NA)))))))))))
+
+
+```
+
+
+```{r - Part 2: Testing differences}
+
+MergedData2016$bmi_group <- factor(MergedData2016$bmi_group , levels=c("underweight", "Normal weight", "Overweight", "Obesity", "Sev Obese"))
+
+#We can see the suggestion that there is a difference in BMI levels between those who have and don't have diabetes.
+BMI_bmi_group_Box <- boxplot(MergedData2016$logBMXBMI~MergedData2016$bmi_group, outline=FALSE, ylab="BMI", xlab="BMI Group") + 
+  scale_y_continuous(limits = quantile(MergedData2016$DIQ010, c(0.1, 0.9)))
+
+#We can see the suggestion that there is a difference in BMI levels between those who have and don't have diabetes.
+Calorie_bmi_group_Box <- boxplot(MergedData2016$logDR1TKCAL~MergedData2016$bmi_group, outline=FALSE, ylab="Total Calories", xlab="BMI Group") + 
+  scale_y_continuous(limits = quantile(MergedData2016$DIQ010, c(0.1, 0.9)))
+
+#We can see the suggestion that there is a difference in BMI levels between those who have and don't have diabetes.
+CalsKg_bmi_group_Box <- boxplot(MergedData2016$Cals_per_kg~MergedData2016$bmi_group, outline=FALSE, ylab="Calories per kg BW", xlab="BMI Group") + 
+  scale_y_continuous(limits = quantile(MergedData2016$DIQ010, c(0.1, 0.9)))
+
+
+
+
+
+one.way <- aov(BMXBMI ~ bmi_group, data = MergedData2016)
+kruskal.test(BMXBMI ~ bmi_group, data = MergedData2016)
+
+summary(one.way)
+
+qqnorm(one.way$residuals)
+
+
+#TukeyHSD(one.way)
+
+
+
+
+
+
+one.way <- aov(Cals_per_kg ~ bmi_group, data = MergedData2016)
+
+
+
+summary(one.way)
+
+
+qqnorm(one.way$residuals)
+
+TukeyHSD(one.way)
+
+
+#calories vs bmi group: ANOVA Test
+#is there a difference between BMI Categories.
+one.way <- aov(DR1TKCAL ~ bmi_group, data = MergedData2016)
+kruskal.test(DR1TKCAL ~ bmi_group, data = MergedData2016)
+
+summary(one.way)
+
+
+qqnorm(one.way$residuals)
+
+TukeyHSD(one.way)
+
+kruskal.test(Cals_per_kg ~ bmi_group, data = MergedData2016)
+pairwise.wilcox.test(MergedData2016$Cals_per_kg, MergedData2016$bmi_group,
+                 p.adjust.method = "BH")
+
+```
+
+
+
+```{r - Working on the weights}
+
+correlate_for_matrix <- MergedData2016[, c("DR1TKCAL","LBDINSI","BMXBMI","DXDTOPF", "LBDGLUSI", "RIDAGEYR", "DIQ010","Cals_per_kg" )]
+cormatrix <- round(cor(correlate_for_matrix),2)
+
+cormatrix
+
+melted_cormatrix <- melt(cormatrix)
+
+ggplot(data = melted_cormatrix, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+
+
+
+
+Superfat <- subset(MergedData2016, MergedData2016$bmi_group == "Sev Obese")
+Overfat <- subset(MergedData2016, MergedData2016$bmi_group == "Obesity")
+Bitfat <- subset(MergedData2016, MergedData2016$bmi_group == "Overweight")
+Underfat <- subset(MergedData2016, MergedData2016$bmi_group == "underweight")
+
+hist(Superfat$logCals_per_kg)
+hist(Overfat$logCals_per_kg)
+hist(Bitfat$logCals_per_kg)
+hist(Underfat$logCals_per_kg)
+
+Superfat$DXDTOPF
+
+
+correlate_for_matrix <- Superfat[, c("DR1TKCAL","LBDINSI","BMXBMI","DXDTOPF", "LBDGLUSI", "RIDAGEYR", "DIQ010","Cals_per_kg" )]
+cormatrix <- round(cor(correlate_for_matrix),2)
+
+cormatrix
+
+melted_cormatrix <- melt(cormatrix)
+
+ggplot(data = melted_cormatrix, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+
+
+
+correlate_for_matrix <- Overfat[, c("logDR1TKCAL","logLBDINSI","logBMXBMI","logDXDTOPF", "logLBDGLUSI", "RIDAGEYR", "DIQ010","logCals_per_kg")]
+cormatrix <- round(cor(correlate_for_matrix),2)
+
+cormatrix
+
+melted_cormatrix <- melt(cormatrix)
+
+ggplot(data = melted_cormatrix, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+
+correlate_for_matrix <- Bitfat[, c("DR1TKCAL","LBDINSI","BMXBMI","DXDTOPF", "LBDGLUSI", "RIDAGEYR", "DIQ010","Cals_per_kg" )]
+cormatrix <- round(cor(correlate_for_matrix),2)
+
+cormatrix
+
+melted_cormatrix <- melt(cormatrix)
+
+ggplot(data = melted_cormatrix, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+
+
+correlate_for_matrix <- Underfat[, c("DR1TKCAL","LBDINSI","BMXBMI","DXDTOPF", "LBDGLUSI", "RIDAGEYR", "DIQ010","Cals_per_kg"  )]
+cormatrix <- round(cor(correlate_for_matrix),2)
+
+cormatrix
+
+melted_cormatrix <- melt(cormatrix)
+
+ggplot(data = melted_cormatrix, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+
+
+
+
+```
+
+
+
+
+```{r}
+MalesOnly <- subset(MergedData2016, MergedData2016$RIAGENDR == 1)
+
+correlate_for_matrix <- MalesOnly[, c("logDR1TKCAL","logLBDINSI","logBMXBMI","logDXDTOPF", "logLBDGLUSI", "RIDAGEYR", "DIQ010","logCals_per_kg")]
+cormatrix_male <- round(cor(correlate_for_matrix),2)
+
+cormatrix_male
+
+
+melted_cormatrix <- melt(cormatrix_male)
+
+ggplot(data = melted_cormatrix, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+
+
+FemalesOnly <- subset(MergedData2016, MergedData2016$RIAGENDR == 2)
+
+correlate_for_matrix <- FemalesOnly[, c("logDR1TKCAL","logLBDINSI","logBMXBMI","logDXDTOPF", "logLBDGLUSI", "RIDAGEYR", "DIQ010","logCals_per_kg")]
+cormatrix_female <- round(cor(correlate_for_matrix),2)
+
+cormatrix_female
+
+
+melted_cormatrix <- melt(cormatrix_female)
+
+ggplot(data = melted_cormatrix, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation")
+
+
+```
+
+
+```{r - Single Linear regression model}
+cals_kg_lm <- lm(Cals_per_kg ~ DR1TKCAL, data = MergedData2016)
+
+cals_bmi <- lm(Cals_per_kg ~BMXBMI, data = MergedData2016)
+
+cals_bmi <- lm(BMXBMI ~Cals_per_kg, data = MergedData2016)
+#summary(cals_kg_lm)
+summary(cals_bmi)
+
+```
+
+```{r}
+Model2016 <- DR1TOT_I
+Model2016 <- merge(Model2016, BMX_I, all=TRUE)
+Model2016 <- merge(Model2016, INS_I, all=TRUE)
+Model2016 <- merge(Model2016, DEMO_I, all=TRUE)
+Model2016 <- merge(Model2016, DXX_I, all=TRUE)
+#MergedData2016 <- merge(MergedData2016, TRIGLY_I, all=TRUE)
+Model2016 <- merge(Model2016, GLU_I, all=TRUE)
+Model2016 <- merge(Model2016, DIQ_I, all=TRUE)
+Model2016 <- merge(Model2016, BPX_I, all=TRUE)
+
+Model2016$bmi_group <- as.factor(ifelse(Model2016$BMXBMI<18.5, 'underweight',
+                     ifelse(Model2016$BMXBMI<25, 'Normal weight',
+                     ifelse(Model2016$BMXBMI<30, 'Overweight',
+                     ifelse(Model2016$BMXBMI<40, 'Obesity',
+                     ifelse(Model2016$BMXBMI>=40, 'Sev Obese',NA))))))
+
+Model2016$Cals_per_kg <- Model2016$DR1TKCAL/Model2016$BMXWT
+
+
+
+nrow(Model2016$Cals_per_kg)
+
+#Model2016$BMXWT
+
+#Model2016$Cals_per_kg
+
+Model2016 <- subset(Model2016, (!is.na(Model2016$Cals_per_kg)))
+Model2016 <- subset(Model2016, (!is.na(Model2016$BMXBMI)))
+#Model2016 <- subset(Model2016, (!is.na(Model2016$DXDTOPF)))
+#Model2016 <- subset(Model2016, (!is.na(Model2016$BPXSY1)))
+
+
+Model2016$logBMXWT = log(Model2016$BMXWT)
+Model2016$logDR1TKCAL = log(Model2016$DR1TKCAL)
+Model2016$logBMXBMI = log(Model2016$BMXBMI)
+Model2016$logDXDTOPF = log(Model2016$DXDTOPF)
+Model2016$logCals_per_kg = log(Model2016$Cals_per_kg)
+
+Model2016 <- subset(Model2016, (!is.na(Model2016$logCals_per_kg)))
+Model2016 <- subset(Model2016, (!is.na(Model2016$logBMXBMI)))
+#Model2016 <- subset(Model2016, (!is.na(Model2016$logDXDTOPF)))
+#Model2016 <- subset(Model2016, (!is.na(Model2016$logBMXWT)))
+#Model2016$logDXDTOPF
+
+#Model2016$logBMXWT
+
+#Model2016$BPXSY1
+
+#Model2016$logBMXWAIST = log(Model2016$BMXWAIST)
+
+Model2016 <- subset(Model2016, (!is.na(Model2016$logCals_per_kg)))
+
+table(Model2016$bmi_group)
+```
+
+
+
+```{r - Multiple Linear regression model}
+
+#logDR1TKCAL","logLBDINSI","logBMXBMI","logDXDTOPF", "logLBDGLUSI", "RIDAGEYR", "DIQ010","logCals_per_kg
+
+cals_kg_mlm <- lm(Cals_per_kg ~  logBMXBMI + DXDTOPF, data = Model2016)
+
+hist(Model2016$DXDTOPF)
+hist(Model2016$BMXBMI)
+hist(Model2016$Cals_per_kg)
+hist(Model2016$logCals_per_kg)
+
+
+#cals_kg_mlm <- lm(logCals_per_kg ~ logBMXBMI, data = MergedData2016)
+
+summary(cals_kg_mlm)
+
+sqrt(deviance(cals_kg_mlm)/df.residual(cals_kg_mlm))
+```
+
+
+```{r}
+Q1 <- quantile(Model2016$DR1TKCAL, .25)
+Q3 <- quantile(Model2016$DR1TKCAL, .75)
+IQR <- IQR(Model2016$DR1TKCAL)
+
+eliminated <- subset(Model2016, Model2016$DR1TKCAL > (Q1 - 1.5*IQR) & Model2016$DR1TKCAL < (Q3 + 1.5*IQR))
+dim(eliminated)
+
+#eliminated = Model2016
+
+boxplot(eliminated$DR1TKCAL)
+
+eliminated <- subset(eliminated, eliminated$DR1TKCAL >=500)
+#eliminated <- subset(eliminated, eliminated$logCals_per_kg >=0)
+
+
+
+eliminated <- subset(eliminated, eliminated$logCals_per_kg >=0)
+
+hist(eliminated$logCals_per_kg)
+
+```
+
+```{r}
+
+
+nrow(eliminated)
+nrow(Model2016)
+
+eliminated$logCals_per_kg
+
+
+
+cals_kg_mlm <- lm(logCals_per_kg ~  logBMXBMI, data = eliminated)
+
+
+par(mfrow=c(2,2))
+plot(cals_kg_mlm)
+par(mfrow=c(1,1))
+
+summary(cals_kg_mlm)
+
+sqrt(deviance(cals_kg_mlm)/df.residual(cals_kg_mlm))
+
+
+
+```
+
+```{r}
+#install.packages("caret")
+
+library("caret")
+
+table(eliminated$bmi_group)
+
+ctrl <- trainControl(method = "cv", number = 5)
+
+#model <- train(Cals_per_kg ~ BMXBMI, data = eliminated, method = "lm", trControl = ctrl)
+
+
+#view summary of k-fold CV               
+#print(model)
+
+table(eliminated$bmi_group)
+
+model <- train(logCals_per_kg ~ logBMXBMI, data = eliminated, method = "lm", trControl = ctrl)
+
+#view summary of k-fold CV               
+#print(model)
+
+table(eliminated$bmi_group)
+
+summary(model)
+
+
+ggplot(Model2016, aes(x = logCals_per_kg, y = logBMXBMI)) + 
+  geom_point() +
+  stat_smooth(method = "lm")
+
+
+ggplot(eliminated, aes(x = Cals_per_kg, y = logBMXBMI)) + 
+  geom_point() +
+  stat_smooth(method = "lm")
+
+res <-resid(model)
+
+#produce residual vs. fitted plot
+plot(fitted(model), res)
+
+#add a horizontal line at 0 
+abline(0,0)
+
+```
+
+
+
+```{r - Part 4: Non-linear regression tests}
+library("caret")
+
+#table(eliminated$bmi_group)
+
+ctrl <- trainControl(method = "cv", number = 5)
+
+model <- train(DR1TKCAL ~ BMXBMI, data = eliminated, method = "lm", trControl = ctrl)
+
+#view summary of k-fold CV               
+print(model)
+
+summary(model)
+
+ggplot(Model2016, aes(x = DR1TKCAL, y = BMXBMI)) + 
+  geom_point() +
+  stat_smooth(method = "lm")
+
+
+
+```
+
+
+```{r}
+
+library(splines)
+# Build the model
+knots <- quantile(eliminated$BMXBMI, p = c(0.25, 0.5, 0.75))
+model <- lm (Cals_per_kg ~ bs(BMXBMI, knots = knots), data = eliminated)
+# Make predictions
+predictions <- model %>% predict(eliminated)
+# Model performance
+data.frame(
+  RMSE = RMSE(predictions, eliminated$Cals_per_kg),
+  R2 = R2(predictions, eliminated$Cals_per_kg)
+)
+
+#Cals_per_kg
+
+ggplot(eliminated, aes(Cals_per_kg, BMXBMI) ) +
+  geom_point() +
+  stat_smooth(method = lm, formula = y ~ splines::bs(x, df = 3))
+
+summary(model)
+
+
+```
+
+```{r}
+
+#gam automatically tries and finds the best fit for non-linear regression
+library(mgcv)
+# Build the model
+model <- gam(Cals_per_kg ~ s(BMXBMI), data = eliminated)
+# Make predictions
+predictions <- model %>% predict(eliminated)
+# Model performance
+data.frame(
+  RMSE = RMSE(predictions, eliminated$Cals_per_kg),
+  R2 = R2(predictions, eliminated$Cals_per_kg)
+)
+
+summary(predictions)
+
+summary(model)
+
+```
+
+```{r}
+ggplot(eliminated, aes(BMXBMI, Cals_per_kg) ) +
+  geom_point() +
+  stat_smooth(method = gam, formula = y ~ s(x))
+```
+
+
+
